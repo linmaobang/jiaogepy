@@ -686,6 +686,8 @@ function GardenContent() {
       <OwnerInboxDrawer
         open={inboxOpen}
         user={authUser}
+        currentGardenId={activeGardenId}
+        currentGardenTotal={totalWaterings}
         onClose={() => setInboxOpen(false)}
         onOpenClaim={() => setClaimOpen(true)}
         onEnterGarden={(targetId) => navigateToGarden(targetId)}

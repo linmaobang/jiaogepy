@@ -16,7 +16,6 @@ import {
   getDocFromServer,
   getFirestore,
   onSnapshot,
-  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -524,7 +523,7 @@ export function subscribeWaterings(
   onError: (err: unknown) => void
 ): Unsubscribe {
   const path = 'waterings';
-  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  const q = query(collection(db, path));
   return onSnapshot(
     q,
     (snapshot) => {
@@ -538,6 +537,11 @@ export function subscribeWaterings(
           createdAt: (data.createdAt as Timestamp | null) ?? null,
           followedAt: (data.followedAt as Timestamp | null) ?? null,
         };
+      });
+      list.sort((a, b) => {
+        const ta = a.createdAt?.toMillis() ?? 0;
+        const tb = b.createdAt?.toMillis() ?? 0;
+        return tb - ta;
       });
       onUpdate(list);
     },
@@ -649,6 +653,27 @@ export async function deleteWateringRecord(
     } catch (deleteError) {
       handleFirestoreError(deleteError ?? txError, OperationType.DELETE, path);
     }
+  }
+}
+
+export async function syncGardenWateringCount(
+  targetCount: number,
+  gardenId?: string
+): Promise<void> {
+  const safeCount = Math.max(0, Math.floor(targetCount));
+  const isCustomGarden = Boolean(gardenId && gardenId !== ROOT_GARDEN_ID);
+  const counterRef = isCustomGarden
+    ? doc(db, 'gardens', gardenId!)
+    : doc(db, 'stats', 'garden');
+  const path = isCustomGarden ? `gardens/${gardenId}` : 'stats/garden';
+
+  try {
+    await updateDoc(counterRef, {
+      totalWaterings: safeCount,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

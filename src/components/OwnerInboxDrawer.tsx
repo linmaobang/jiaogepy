@@ -21,6 +21,7 @@ import {
   subscribeGardenWaterings,
   subscribeMyClaimedGardens,
   subscribeWaterings,
+  syncGardenWateringCount,
   toggleFollowedStatus,
   type UserGarden,
   type WateringRecord,
@@ -30,6 +31,8 @@ import { getSeedlingMeta } from '../utils/friendCard';
 interface OwnerInboxDrawerProps {
   open: boolean;
   user: User | null;
+  currentGardenId?: string | null;
+  currentGardenTotal?: number;
   onClose: () => void;
   onOpenClaim: () => void;
   onEnterGarden: (gardenId: string | null) => void;
@@ -51,6 +54,8 @@ function formatTime(record: WateringRecord): string {
 export function OwnerInboxDrawer({
   open,
   user,
+  currentGardenId = null,
+  currentGardenTotal,
   onClose,
   onOpenClaim,
   onEnterGarden,
@@ -65,6 +70,7 @@ export function OwnerInboxDrawer({
   const [copiedLink, setCopiedLink] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   const isRootAdmin = Boolean(
     user && user.emailVerified && user.email === ADMIN_EMAIL
@@ -82,6 +88,12 @@ export function OwnerInboxDrawer({
       (gardens) => {
         setMyGardens(gardens);
         setSelectedGardenId((prev) => {
+          if (currentGardenId && gardens.some((g) => g.id === currentGardenId)) {
+            return currentGardenId;
+          }
+          if (!currentGardenId && isRootAdmin) {
+            return ROOT_GARDEN_ID;
+          }
           if (prev === ROOT_GARDEN_ID && isRootAdmin) return prev;
           if (prev && gardens.some((g) => g.id === prev)) return prev;
           if (isRootAdmin) return ROOT_GARDEN_ID;
@@ -94,7 +106,7 @@ export function OwnerInboxDrawer({
     );
 
     return () => unsubGardens();
-  }, [open, user, isRootAdmin]);
+  }, [open, user, isRootAdmin, currentGardenId]);
 
   // Subscribe to waterings of the currently selected garden
   useEffect(() => {
@@ -234,8 +246,30 @@ export function OwnerInboxDrawer({
     }
   };
 
+  const handleSyncCount = async () => {
+    if (syncBusy || !activeGardenId) return;
+    setSyncBusy(true);
+    setErrorMsg('');
+    try {
+      await syncGardenWateringCount(records.length, activeGardenId);
+    } catch (err) {
+      console.error('Sync watering count failed:', err);
+      setErrorMsg('同步计数失败，请稍后重试。');
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
   const pendingCount = records.filter((r) => !r.followed).length;
   const followedCount = records.filter((r) => r.followed).length;
+  const isViewingCurrentPageGarden =
+    (activeGardenId === ROOT_GARDEN_ID && !currentGardenId) ||
+    activeGardenId === currentGardenId;
+  const hasCountMismatch =
+    isViewingCurrentPageGarden &&
+    !loading &&
+    typeof currentGardenTotal === 'number' &&
+    currentGardenTotal > records.length;
 
   const filteredRecords = records.filter((r) => {
     if (filter === 'pending') return !r.followed;
@@ -461,6 +495,30 @@ export function OwnerInboxDrawer({
                       </button>
                     ))}
                   </div>
+
+                  {hasCountMismatch && (
+                    <div className="p-3 rounded-xl bg-[#fbfaf7] border border-[#e4e2dc] flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[#5d675f] leading-relaxed">
+                        花园计数显示{' '}
+                        <strong className="font-mono-num text-[#1a211c]">
+                          {currentGardenTotal}
+                        </strong>{' '}
+                        瓢，当前名单{' '}
+                        <strong className="font-mono-num text-[#1a211c]">
+                          {records.length}
+                        </strong>{' '}
+                        人（含早期测试残留计数）
+                      </span>
+                      <button
+                        type="button"
+                        disabled={syncBusy}
+                        onClick={() => void handleSyncCount()}
+                        className="px-2.5 py-1.5 rounded-lg bg-[#1a211c] text-white font-medium hover:bg-[#2c362f] transition-colors whitespace-nowrap shrink-0 disabled:opacity-50 cursor-pointer"
+                      >
+                        {syncBusy ? '校准中...' : `校准为 ${records.length}`}
+                      </button>
+                    </div>
+                  )}
 
                   {errorMsg && (
                     <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
