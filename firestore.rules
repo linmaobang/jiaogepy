@@ -96,6 +96,19 @@ service cloud.firestore {
         && nextData.updatedAt == request.time;
     }
 
+    function isValidGardenStatsAdminUpdate(nextData, prevData) {
+      return nextData.keys().hasAll(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && nextData.keys().hasOnly(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && nextData.diff(prevData).affectedKeys().hasOnly(['totalWaterings', 'updatedAt'])
+        && nextData.lastWateringId == prevData.lastWateringId
+        && nextData.totalWaterings is int
+        && prevData.totalWaterings is int
+        && nextData.totalWaterings >= 0
+        && nextData.totalWaterings <= prevData.totalWaterings
+        && nextData.updatedAt is timestamp
+        && nextData.updatedAt == request.time;
+    }
+
     // User-Claimed Seedling Gardens Blueprints
     function isValidSeedlingType(kind) {
       return kind is string && kind in ['sunflower', 'sakura', 'pine', 'clover'];
@@ -205,16 +218,16 @@ service cloud.firestore {
 
     // /waterings/{wateringId}: Root garden (@linmugua) unique waterings
     match /waterings/{wateringId} {
-      allow get: if isValidHandleId(wateringId) && isAdmin();
+      allow get: if isValidId(wateringId) && isAdmin();
       allow list: if isAdmin();
       allow create: if isValidHandleId(wateringId)
         && isValidWateringCreate(incoming())
         && incoming().xHandleLower == ('@' + wateringId)
         && getAfter(/databases/$(database)/documents/stats/garden).data.lastWateringId == wateringId;
-      allow update: if isValidHandleId(wateringId)
+      allow update: if isValidId(wateringId)
         && isAdmin()
         && isValidWateringUpdate(incoming(), existing());
-      allow delete: if isValidHandleId(wateringId) && isAdmin();
+      allow delete: if isValidId(wateringId) && isAdmin();
     }
 
     // /stats/{statId}: Root garden public aggregate counter
@@ -228,9 +241,17 @@ service cloud.firestore {
         && existsAfter(/databases/$(database)/documents/waterings/$(incoming().lastWateringId));
       allow update: if isValidId(statId)
         && statId == 'garden'
-        && isValidGardenStatsUpdate(incoming(), existing())
-        && !exists(/databases/$(database)/documents/waterings/$(incoming().lastWateringId))
-        && existsAfter(/databases/$(database)/documents/waterings/$(incoming().lastWateringId));
+        && (
+          (
+            isValidGardenStatsUpdate(incoming(), existing())
+            && !exists(/databases/$(database)/documents/waterings/$(incoming().lastWateringId))
+            && existsAfter(/databases/$(database)/documents/waterings/$(incoming().lastWateringId))
+          )
+          || (
+            isAdmin()
+            && isValidGardenStatsAdminUpdate(incoming(), existing())
+          )
+        );
       allow delete: if false;
     }
 
@@ -260,6 +281,15 @@ service cloud.firestore {
             && (existing().ownerUid == request.auth.uid || isAdmin())
             && incoming().diff(existing()).affectedKeys().hasOnly(['seedlingType', 'updatedAt'])
           )
+          // Action 3: Owner/Admin decrements totalWaterings when removing a record
+          || (
+            isSignedIn()
+            && request.auth.token.email_verified == true
+            && (existing().ownerUid == request.auth.uid || isAdmin())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['totalWaterings', 'updatedAt'])
+            && incoming().totalWaterings >= 0
+            && incoming().totalWaterings <= existing().totalWaterings
+          )
         );
       allow delete: if isValidHandleId(gardenId)
         && isSignedIn()
@@ -268,7 +298,7 @@ service cloud.firestore {
       // Subcollection /gardens/{gardenId}/waterings/{visitorHandleId}
       match /waterings/{visitorHandleId} {
         allow get: if isValidHandleId(gardenId)
-          && isValidHandleId(visitorHandleId)
+          && isValidId(visitorHandleId)
           && isSignedIn()
           && (existing().gardenOwnerUid == request.auth.uid || isAdmin());
         allow list: if isSignedIn()
@@ -281,13 +311,13 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/gardens/$(gardenId)).data.ownerUid == incoming().gardenOwnerUid
           && getAfter(/databases/$(database)/documents/gardens/$(gardenId)).data.lastWateringId == visitorHandleId;
         allow update: if isValidHandleId(gardenId)
-          && isValidHandleId(visitorHandleId)
+          && isValidId(visitorHandleId)
           && isSignedIn()
           && request.auth.token.email_verified == true
           && (existing().gardenOwnerUid == request.auth.uid || isAdmin())
           && isValidGardenWateringUpdate(incoming(), existing());
         allow delete: if isValidHandleId(gardenId)
-          && isValidHandleId(visitorHandleId)
+          && isValidId(visitorHandleId)
           && isSignedIn()
           && (existing().gardenOwnerUid == request.auth.uid || isAdmin());
       }

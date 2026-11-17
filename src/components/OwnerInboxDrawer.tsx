@@ -64,6 +64,7 @@ export function OwnerInboxDrawer({
   const [copiedHandles, setCopiedHandles] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const isRootAdmin = Boolean(
     user && user.emailVerified && user.email === ADMIN_EMAIL
@@ -202,6 +203,34 @@ export function OwnerInboxDrawer({
       window.setTimeout(() => setCopiedHandles(false), 1800);
     } catch {
       setErrorMsg('剪贴板复制失败，请手动选中账号复制。');
+    }
+  };
+
+  const handleToggleFollow = async (item: WateringRecord) => {
+    if (busyId) return;
+    setBusyId(item.id);
+    setErrorMsg('');
+    try {
+      await toggleFollowedStatus(item.id, !item.followed, activeGardenId);
+    } catch (err) {
+      console.error('Toggle follow status failed:', err);
+      setErrorMsg(`无法更新 ${item.xHandle} 的关注状态，请确认权限或稍后重试。`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDeleteRecord = async (item: WateringRecord) => {
+    if (busyId) return;
+    setBusyId(item.id);
+    setErrorMsg('');
+    try {
+      await deleteWateringRecord(item.id, activeGardenId);
+    } catch (err) {
+      console.error('Delete watering record failed:', err);
+      setErrorMsg(`删除 ${item.xHandle} 失败，请确认登录权限或稍后重试。`);
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -476,14 +505,9 @@ export function OwnerInboxDrawer({
                             <div className="flex items-center gap-2 shrink-0">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  void toggleFollowedStatus(
-                                    item.id,
-                                    !item.followed,
-                                    activeGardenId
-                                  )
-                                }
-                                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                                disabled={busyId === item.id}
+                                onClick={() => void handleToggleFollow(item)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-50 cursor-pointer ${
                                   item.followed
                                     ? 'bg-[#f0fdf4] text-[#15803d] border border-[#bbf7d0] hover:bg-[#dcfce7]'
                                     : 'bg-[#1a211c] text-white hover:bg-[#2c362f]'
@@ -493,11 +517,10 @@ export function OwnerInboxDrawer({
                               </button>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  void deleteWateringRecord(item.id, activeGardenId)
-                                }
+                                disabled={busyId === item.id}
+                                onClick={() => void handleDeleteRecord(item)}
                                 aria-label={`删除 ${item.xHandle}`}
-                                className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-[#5d675f] hover:text-red-700 hover:bg-red-50 transition-colors"
+                                className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-[#5d675f] hover:text-red-700 hover:bg-red-50 transition-colors disabled:opacity-40 cursor-pointer"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>

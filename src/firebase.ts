@@ -607,18 +607,48 @@ export async function deleteWateringRecord(
   wateringId: string,
   gardenId?: string
 ): Promise<void> {
-  const docRef =
-    gardenId && gardenId !== ROOT_GARDEN_ID
-      ? doc(db, 'gardens', gardenId, 'waterings', wateringId)
-      : doc(db, 'waterings', wateringId);
-  const path =
-    gardenId && gardenId !== ROOT_GARDEN_ID
-      ? `gardens/${gardenId}/waterings/${wateringId}`
-      : `waterings/${wateringId}`;
+  const isCustomGarden = Boolean(gardenId && gardenId !== ROOT_GARDEN_ID);
+  const docRef = isCustomGarden
+    ? doc(db, 'gardens', gardenId!, 'waterings', wateringId)
+    : doc(db, 'waterings', wateringId);
+  const counterRef = isCustomGarden
+    ? doc(db, 'gardens', gardenId!)
+    : doc(db, 'stats', 'garden');
+  const path = isCustomGarden
+    ? `gardens/${gardenId}/waterings/${wateringId}`
+    : `waterings/${wateringId}`;
+
   try {
-    await deleteDoc(docRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+    await runTransaction(db, async (transaction) => {
+      const [recordSnap, counterSnap] = await Promise.all([
+        transaction.get(docRef),
+        transaction.get(counterRef),
+      ]);
+      if (!recordSnap.exists()) {
+        return;
+      }
+
+      transaction.delete(docRef);
+
+      if (counterSnap.exists()) {
+        const counterData = counterSnap.data();
+        const currentTotal = Number(counterData?.totalWaterings ?? 0);
+        const hasLastWateringId = typeof counterData?.lastWateringId === 'string';
+        if (currentTotal > 0 && hasLastWateringId) {
+          transaction.update(counterRef, {
+            totalWaterings: Math.max(0, currentTotal - 1),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    });
+  } catch (txError) {
+    // Fallback: if counter doc uses an older schema, still allow deleting the test record
+    try {
+      await deleteDoc(docRef);
+    } catch (deleteError) {
+      handleFirestoreError(deleteError ?? txError, OperationType.DELETE, path);
+    }
   }
 }
 
