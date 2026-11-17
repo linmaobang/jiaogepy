@@ -1,0 +1,6 @@
+{
+  "name": "浇个朋友",
+  "description": "来浇一瓢水，留下你的 X 账号，我马上就关注你哦。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

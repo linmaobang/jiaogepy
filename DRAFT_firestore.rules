@@ -1,0 +1,302 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Deny all reads and writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidHandleId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 15 && id.matches('^[a-z0-9_]{1,15}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && (
+          request.auth.token.email == 'linmaobang@gmail.com'
+          || exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
+    }
+
+    // Root Watering Validation Blueprints
+    function isValidWateringShape(data) {
+      return data.keys().hasAll(['xHandle', 'xHandleLower', 'followed', 'createdAt'])
+        && data.keys().hasOnly(['xHandle', 'xHandleLower', 'followed', 'createdAt', 'followedAt'])
+        && data.xHandle is string
+        && data.xHandle.size() >= 2
+        && data.xHandle.size() <= 16
+        && data.xHandle.matches('^@[A-Za-z0-9_]{1,15}$')
+        && data.xHandleLower is string
+        && data.xHandleLower.size() >= 2
+        && data.xHandleLower.size() <= 16
+        && data.xHandleLower.matches('^@[a-z0-9_]{1,15}$')
+        && data.xHandle.lower() == data.xHandleLower
+        && data.followed is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidWateringCreate(data) {
+      return data.keys().hasAll(['xHandle', 'xHandleLower', 'followed', 'createdAt'])
+        && data.keys().hasOnly(['xHandle', 'xHandleLower', 'followed', 'createdAt'])
+        && isValidWateringShape(data)
+        && data.followed == false
+        && data.createdAt == request.time;
+    }
+
+    function isValidWateringUpdate(nextData, prevData) {
+      return isValidWateringShape(nextData)
+        && nextData.xHandle == prevData.xHandle
+        && nextData.xHandleLower == prevData.xHandleLower
+        && nextData.createdAt == prevData.createdAt
+        && nextData.diff(prevData).affectedKeys().hasOnly(['followed', 'followedAt'])
+        && (
+          (nextData.followed == true && nextData.followedAt is timestamp && nextData.followedAt == request.time)
+          || (nextData.followed == false && !('followedAt' in nextData))
+        );
+    }
+
+    // Root Garden Stats Validation Blueprints
+    function isValidGardenStatsCreate(data) {
+      return data.keys().hasAll(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && data.keys().hasOnly(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && data.totalWaterings is int
+        && data.totalWaterings == 1
+        && isValidHandleId(data.lastWateringId)
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidGardenStatsUpdate(nextData, prevData) {
+      return nextData.keys().hasAll(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && nextData.keys().hasOnly(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && nextData.diff(prevData).affectedKeys().hasOnly(['totalWaterings', 'lastWateringId', 'updatedAt'])
+        && nextData.totalWaterings is int
+        && prevData.totalWaterings is int
+        && nextData.totalWaterings == prevData.totalWaterings + 1
+        && isValidHandleId(nextData.lastWateringId)
+        && nextData.updatedAt is timestamp
+        && nextData.updatedAt == request.time;
+    }
+
+    // User-Claimed Seedling Gardens Blueprints
+    function isValidSeedlingType(kind) {
+      return kind is string && kind in ['sunflower', 'sakura', 'pine', 'clover'];
+    }
+
+    function isValidUserGardenShape(data) {
+      return data.keys().hasAll([
+          'ownerUid',
+          'ownerHandle',
+          'ownerHandleLower',
+          'seedlingType',
+          'totalWaterings',
+          'lastWateringId',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid',
+          'ownerHandle',
+          'ownerHandleLower',
+          'seedlingType',
+          'totalWaterings',
+          'lastWateringId',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerHandle is string
+        && data.ownerHandle.size() >= 2
+        && data.ownerHandle.size() <= 16
+        && data.ownerHandle.matches('^@[A-Za-z0-9_]{1,15}$')
+        && data.ownerHandleLower is string
+        && data.ownerHandleLower.size() >= 2
+        && data.ownerHandleLower.size() <= 16
+        && data.ownerHandleLower.matches('^@[a-z0-9_]{1,15}$')
+        && data.ownerHandle.lower() == data.ownerHandleLower
+        && isValidSeedlingType(data.seedlingType)
+        && data.totalWaterings is int
+        && data.totalWaterings >= 0
+        && data.lastWateringId is string
+        && data.lastWateringId.size() <= 15
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserGardenCreate(data, gardenId) {
+      return isValidUserGardenShape(data)
+        && data.ownerUid == request.auth.uid
+        && data.ownerHandleLower == ('@' + gardenId)
+        && data.totalWaterings == 0
+        && data.lastWateringId == ''
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidUserGardenUpdate(nextData, prevData) {
+      return isValidUserGardenShape(nextData)
+        && nextData.ownerUid == prevData.ownerUid
+        && nextData.ownerHandle == prevData.ownerHandle
+        && nextData.ownerHandleLower == prevData.ownerHandleLower
+        && nextData.createdAt == prevData.createdAt
+        && nextData.updatedAt == request.time;
+    }
+
+    // Subcollection Waterings on User-Claimed Gardens
+    function isValidGardenWateringShape(data) {
+      return data.keys().hasAll(['gardenOwnerUid', 'xHandle', 'xHandleLower', 'followed', 'createdAt'])
+        && data.keys().hasOnly(['gardenOwnerUid', 'xHandle', 'xHandleLower', 'followed', 'createdAt', 'followedAt'])
+        && data.gardenOwnerUid is string
+        && data.gardenOwnerUid.size() >= 1
+        && data.gardenOwnerUid.size() <= 128
+        && data.xHandle is string
+        && data.xHandle.size() >= 2
+        && data.xHandle.size() <= 16
+        && data.xHandle.matches('^@[A-Za-z0-9_]{1,15}$')
+        && data.xHandleLower is string
+        && data.xHandleLower.size() >= 2
+        && data.xHandleLower.size() <= 16
+        && data.xHandleLower.matches('^@[a-z0-9_]{1,15}$')
+        && data.xHandle.lower() == data.xHandleLower
+        && data.followed is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidGardenWateringCreate(data) {
+      return data.keys().hasAll(['gardenOwnerUid', 'xHandle', 'xHandleLower', 'followed', 'createdAt'])
+        && data.keys().hasOnly(['gardenOwnerUid', 'xHandle', 'xHandleLower', 'followed', 'createdAt'])
+        && isValidGardenWateringShape(data)
+        && data.followed == false
+        && data.createdAt == request.time;
+    }
+
+    function isValidGardenWateringUpdate(nextData, prevData) {
+      return isValidGardenWateringShape(nextData)
+        && nextData.gardenOwnerUid == prevData.gardenOwnerUid
+        && nextData.xHandle == prevData.xHandle
+        && nextData.xHandleLower == prevData.xHandleLower
+        && nextData.createdAt == prevData.createdAt
+        && nextData.diff(prevData).affectedKeys().hasOnly(['followed', 'followedAt'])
+        && (
+          (nextData.followed == true && nextData.followedAt is timestamp && nextData.followedAt == request.time)
+          || (nextData.followed == false && !('followedAt' in nextData))
+        );
+    }
+
+    // /waterings/{wateringId}: Root garden (@linmugua) unique waterings
+    match /waterings/{wateringId} {
+      allow get: if isValidHandleId(wateringId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidHandleId(wateringId)
+        && isValidWateringCreate(incoming())
+        && incoming().xHandleLower == ('@' + wateringId)
+        && getAfter(/databases/$(database)/documents/stats/garden).data.lastWateringId == wateringId;
+      allow update: if isValidHandleId(wateringId)
+        && isAdmin()
+        && isValidWateringUpdate(incoming(), existing());
+      allow delete: if isValidHandleId(wateringId) && isAdmin();
+    }
+
+    // /stats/{statId}: Root garden public aggregate counter
+    match /stats/{statId} {
+      allow get: if isValidId(statId) && statId == 'garden';
+      allow list: if false;
+      allow create: if isValidId(statId)
+        && statId == 'garden'
+        && isValidGardenStatsCreate(incoming())
+        && !exists(/databases/$(database)/documents/waterings/$(incoming().lastWateringId))
+        && existsAfter(/databases/$(database)/documents/waterings/$(incoming().lastWateringId));
+      allow update: if isValidId(statId)
+        && statId == 'garden'
+        && isValidGardenStatsUpdate(incoming(), existing())
+        && !exists(/databases/$(database)/documents/waterings/$(incoming().lastWateringId))
+        && existsAfter(/databases/$(database)/documents/waterings/$(incoming().lastWateringId));
+      allow delete: if false;
+    }
+
+    // /gardens/{gardenId}: User-claimed seedling gardens
+    match /gardens/{gardenId} {
+      allow get: if isValidHandleId(gardenId);
+      allow list: if isSignedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow create: if isSignedIn()
+        && request.auth.token.email_verified == true
+        && isValidHandleId(gardenId)
+        && isValidUserGardenCreate(incoming(), gardenId);
+      allow update: if isValidHandleId(gardenId)
+        && isValidUserGardenUpdate(incoming(), existing())
+        && (
+          // Action 1: Public visitor watering increments counter atomically alongside a new child watering
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['totalWaterings', 'lastWateringId', 'updatedAt'])
+            && incoming().totalWaterings == existing().totalWaterings + 1
+            && isValidHandleId(incoming().lastWateringId)
+            && !exists(/databases/$(database)/documents/gardens/$(gardenId)/waterings/$(incoming().lastWateringId))
+            && existsAfter(/databases/$(database)/documents/gardens/$(gardenId)/waterings/$(incoming().lastWateringId))
+          )
+          // Action 2: Owner updates their seedling species
+          || (
+            isSignedIn()
+            && request.auth.token.email_verified == true
+            && (existing().ownerUid == request.auth.uid || isAdmin())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['seedlingType', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidHandleId(gardenId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+
+      // Subcollection /gardens/{gardenId}/waterings/{visitorHandleId}
+      match /waterings/{visitorHandleId} {
+        allow get: if isValidHandleId(gardenId)
+          && isValidHandleId(visitorHandleId)
+          && isSignedIn()
+          && (existing().gardenOwnerUid == request.auth.uid || isAdmin());
+        allow list: if isSignedIn()
+          && (resource.data.gardenOwnerUid == request.auth.uid || isAdmin());
+        allow create: if isValidHandleId(gardenId)
+          && isValidHandleId(visitorHandleId)
+          && isValidGardenWateringCreate(incoming())
+          && incoming().xHandleLower == ('@' + visitorHandleId)
+          && exists(/databases/$(database)/documents/gardens/$(gardenId))
+          && get(/databases/$(database)/documents/gardens/$(gardenId)).data.ownerUid == incoming().gardenOwnerUid
+          && getAfter(/databases/$(database)/documents/gardens/$(gardenId)).data.lastWateringId == visitorHandleId;
+        allow update: if isValidHandleId(gardenId)
+          && isValidHandleId(visitorHandleId)
+          && isSignedIn()
+          && request.auth.token.email_verified == true
+          && (existing().gardenOwnerUid == request.auth.uid || isAdmin())
+          && isValidGardenWateringUpdate(incoming(), existing());
+        allow delete: if isValidHandleId(gardenId)
+          && isValidHandleId(visitorHandleId)
+          && isSignedIn()
+          && (existing().gardenOwnerUid == request.auth.uid || isAdmin());
+      }
+    }
+
+    // /admins/{uid}: Read-only for self/admin, no client writes
+    match /admins/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+  }
+}
